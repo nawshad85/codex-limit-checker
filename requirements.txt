@@ -1,0 +1,3 @@
+# Optional, lightweight Windows toast notifications. The application continues
+# to run if this package is unavailable or a notification cannot be delivered.
+winotify==1.1.0; sys_platform == "win32"

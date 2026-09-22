@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# PyInstaller 6.20+ includes Python 3.14 support. Pin the tested build tool so
+# repeated Windows builds produce the same bootloader and hook set.
+PyInstaller==6.22.3

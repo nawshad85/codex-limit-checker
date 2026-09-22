@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.venv/
+
+# Tests and tooling
+.coverage
+.pytest_cache/
+.mypy_cache/
+
+# PyInstaller output
+build/
+dist/
+CodexUsageMonitor.spec
+
+# Local editor/OS files
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini
