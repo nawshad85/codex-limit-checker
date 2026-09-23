@@ -19,6 +19,7 @@ echo Building Codex Usage Monitor...
     --onefile ^
     --windowed ^
     --name "CodexUsageMonitor" ^
+    --add-data "assets\openai-white-monoblossom.png;assets" ^
     "main.py"
 
 set "BUILD_EXIT=%ERRORLEVEL%"

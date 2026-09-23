@@ -1,18 +1,46 @@
 # Codex Usage Monitor
 
-Codex Usage Monitor is a small, frameless Windows widget that reads local Codex
-rollout files and keeps the useful limits visible while you work. It does not
-need an OpenAI API key, a cloud service, or a separate account connection.
+Codex Usage Monitor is a small Windows widget that reads local Codex session
+logs. It shows the latest available 5-hour and 7-day limits, reset countdowns,
+and context usage when available. It runs locally and does not need an API key.
 
-The compact view shows the remaining 5-hour and weekly allowance, their reset
-countdowns, current context usage, and a `LIVE`, `STALE`, or `NO DATA` state. A
-click expands the widget to show token counts and any model, reasoning effort,
-plan, or active-project metadata available in the current rollout.
+## Clone and run
+
+These steps are for Windows 10/11. Install Python 3.10 or newer (with Tkinter)
+and Git first.
+
+1. **Clone the project.** Open PowerShell and download the code.
+
+   ```powershell
+   git clone https://github.com/nawshad85/codex-limit-checker.git
+   cd codex-limit-checker
+   ```
+
+2. **Create a virtual environment.** Keep this app's packages separate.
+
+   ```powershell
+   python -m venv .venv
+   ```
+
+3. **Install the dependencies.** This includes optional Windows notifications.
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+   ```
+
+4. **Start the widget.** It reads Codex session logs as they are written.
+
+   ```powershell
+   .\.venv\Scripts\python.exe main.py
+   ```
+
+5. **Use the widget.** Click to expand it, drag to move it, or right-click for
+   settings and Exit. It may show `NO DATA` until Codex writes usage data.
 
 ## Features
 
 - 5-hour and weekly used/remaining percentages and live reset countdowns
-- Current active-session context usage and context-window size
+- Active-session context usage and context-window size when available
 - Current model, reasoning effort, plan, and project name when Codex records them
 - Automatic detection of new and concurrently active rollout files
 - Cached last-known-good rate limits when a newer event has `rate_limits: null`
@@ -22,44 +50,11 @@ plan, or active-project metadata available in the current rollout.
 - Optional Windows notifications at 20%, 10%, and 5% 5-hour allowance remaining
 - Per-user Windows startup support without administrator access
 - Incremental background reads with bounded initial scans
-- Privacy-safe rotating logs and diagnostic command-line modes
+- Small rotating logs and diagnostic command-line modes
 
-## Requirements
-
-- Windows 10 or Windows 11
-- Python 3.10 or newer when running from source
-- Tkinter, included with the standard Windows installer from python.org
-- Codex rollout files under a local Codex home directory
-
-The monitor itself uses Python's standard library. `winotify` is a small,
-Windows-only optional dependency used for native toast notifications. If it is
-not installed or Windows rejects a toast, monitoring continues normally.
-
-## Installation from source
-
-Download or clone this project, open PowerShell in its directory, and run:
-
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-python main.py
-```
-
-If PowerShell prevents activation, the virtual environment can be used without
-activating it:
-
-```powershell
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-.venv\Scripts\python.exe main.py
-```
-
-No dependency installation is required if notifications are not needed:
-
-```powershell
-python main.py
-```
+The compact bar uses OpenAI's Blossom symbol from its [official logo pack](https://cdn.openai.com/brand/OpenAI-Logos-2025.zip).
+The symbol belongs to OpenAI. This independent project is not affiliated with
+or endorsed by OpenAI.
 
 ## Codex session directory
 
@@ -228,12 +223,11 @@ disable and re-enable startup so the stored command points at the new location.
 
 ## Build the standalone executable
 
-PyInstaller must build Windows executables on Windows. Install the pinned build
-requirements in the virtual environment, then run the build script:
+Close the running widget first. Install PyInstaller in the virtual environment,
+then run the build script on Windows:
 
 ```powershell
-.venv\Scripts\Activate.ps1
-python -m pip install -r requirements-build.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
 .\build.bat
 ```
 
@@ -244,9 +238,10 @@ dist\CodexUsageMonitor.exe
 ```
 
 It is a one-file, no-console executable and does not require Python on the
-computer where it runs. No custom icon is bundled. An unsigned local build may
-trigger Windows SmartScreen or antivirus reputation warnings; inspect the
-source and build locally if that is a concern.
+computer where it runs. The executable uses the default file icon; the Blossom
+symbol appears inside the widget. An unsigned local build may trigger Windows
+SmartScreen or antivirus reputation warnings; inspect the source and build
+locally if that is a concern.
 
 `build.bat` uses `.venv\Scripts\python.exe` when present and otherwise falls
 back to `python` on `PATH`. It deliberately fails with an actionable message if
@@ -366,4 +361,3 @@ app/notifications.py    Optional threshold notification provider
 tests/                  Synthetic parser and monitor tests
 build.bat               Standalone Windows build entry point
 ```
-# codex-limit-checker

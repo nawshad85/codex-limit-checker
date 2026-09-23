@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import queue
+import sys
 import time
 import tkinter as tk
 import tkinter.font as tkfont
@@ -99,6 +100,7 @@ class CodexUsageMonitorUI:
 
         self._font_family = self._select_font_family()
         self._configure_window()
+        self._logo_image = self._load_logo_image()
         self._build_context_menu()
         self._bind_events()
         self._render()
@@ -115,6 +117,15 @@ class CodexUsageMonitorUI:
 
     def _font(self, size: int, weight: str = "normal") -> tuple[str, int, str]:
         return self._font_family, size, weight
+
+    def _load_logo_image(self) -> Optional[tk.PhotoImage]:
+        bundle_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+        logo_path = bundle_root / "assets" / "openai-white-monoblossom.png"
+        try:
+            return tk.PhotoImage(master=self.root, file=str(logo_path))
+        except (OSError, tk.TclError):
+            LOGGER.warning("Widget logo could not be loaded")
+            return None
 
     @property
     def size(self) -> tuple[int, int]:
@@ -719,41 +730,47 @@ class CodexUsageMonitorUI:
 
     def _render_compact(self, _width: int, _height: int) -> None:
         status_color = self._status_color(self.snapshot.status)
-        self.canvas.create_text(
-            14,
-            11,
-            text="CODEX",
-            anchor="nw",
-            fill=Palette.TEXT,
-            font=self._font(10, "bold"),
-        )
-        self.canvas.create_oval(14, 34, 20, 40, fill=status_color, outline="")
+        if self._logo_image is not None:
+            self.canvas.create_image(38, 18, image=self._logo_image)
+        else:
+            self.canvas.create_text(
+                14,
+                11,
+                text="CODEX",
+                anchor="nw",
+                fill=Palette.TEXT,
+                font=self._font(10, "bold"),
+            )
+        status_y = 37
+        self.canvas.create_oval(14, status_y - 3, 20, status_y + 3, fill=status_color, outline="")
         self.canvas.create_text(
             25,
-            31,
+            status_y,
             text=self.snapshot.status.value,
-            anchor="nw",
+            anchor="w",
             fill=Palette.MUTED,
             font=self._font(7, "bold"),
         )
-        for x in (68, 181, 294):
+        section_starts = (68, 195, 322)
+        block_width = 104
+        for x in section_starts:
             self.canvas.create_line(x, 10, x, 46, fill=Palette.DIVIDER)
 
         self._compact_rate_block(
-            78,
-            100,
+            section_starts[0] + 10,
+            block_width,
             "5H",
             self.snapshot.five_hour,
             self._bar_display["five_hour"],
         )
         self._compact_rate_block(
-            191,
-            93,
-            "WEEK",
+            section_starts[1] + 10,
+            block_width,
+            "7D",
             self.snapshot.weekly,
             self._bar_display["weekly"],
         )
-        self._compact_context_block(304, 131)
+        self._compact_context_block(section_starts[2] + 10, block_width)
 
     def _compact_rate_block(self, x: int, width: int, label: str, rate, display: Optional[float]) -> None:
         remaining = rate.remaining_percent if rate else None
@@ -820,8 +837,10 @@ class CodexUsageMonitorUI:
         self._progress_bar(x, 47, width, 3, self._bar_display["context"], self._context_color(used))
 
     def _render_expanded(self, width: int, _height: int) -> None:
+        if self._logo_image is not None:
+            self.canvas.create_image(25, 26, image=self._logo_image)
         self.canvas.create_text(
-            18,
+            47 if self._logo_image is not None else 18,
             15,
             text="CODEX MONITOR",
             anchor="nw",
@@ -829,19 +848,20 @@ class CodexUsageMonitorUI:
             font=self._font(12, "bold"),
         )
         color = self._status_color(self.snapshot.status)
-        self.canvas.create_oval(width - 91, 20, width - 83, 28, fill=color, outline="")
+        status_y = 24
+        self.canvas.create_oval(width - 91, status_y - 4, width - 83, status_y + 4, fill=color, outline="")
         self.canvas.create_text(
-            width - 17,
-            16,
+            width - 77,
+            status_y,
             text=self.snapshot.status.value,
-            anchor="ne",
+            anchor="w",
             fill=Palette.MUTED,
             font=self._font(8, "bold"),
         )
         self.canvas.create_line(18, 43, width - 18, 43, fill=Palette.DIVIDER)
 
         self._expanded_rate_row(18, 55, width - 36, "5 HOUR", self.snapshot.five_hour, "five_hour")
-        self._expanded_rate_row(18, 121, width - 36, "WEEK", self.snapshot.weekly, "weekly")
+        self._expanded_rate_row(18, 121, width - 36, "7D", self.snapshot.weekly, "weekly")
         self._expanded_context_row(18, 187, width - 36)
         self.canvas.create_line(18, 255, width - 18, 255, fill=Palette.DIVIDER)
 
