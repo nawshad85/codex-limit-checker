@@ -1,13 +1,14 @@
 # Codex Usage Monitor
 
-Codex Usage Monitor is a small Windows widget that reads local Codex session
-logs. It shows the latest available 5-hour and 7-day limits, reset countdowns,
-and context usage when available. It runs locally and does not need an API key.
+Codex Usage Monitor is a small Windows widget for Codex rate limits and context
+usage. It asks the installed, signed-in Codex CLI for account limits and reads
+local session logs for context. It does not need an OpenAI API key or make model
+requests.
 
 ## Clone and run
 
-These steps are for Windows 10/11. Install Python 3.10 or newer (with Tkinter)
-and Git first.
+These steps are for Windows 10/11. Install Python 3.10 or newer (with Tkinter),
+Git, and the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli) first.
 
 1. **Clone the project.** Open PowerShell and download the code.
 
@@ -28,14 +29,22 @@ and Git first.
    .\.venv\Scripts\python.exe -m pip install -r requirements.txt
    ```
 
-4. **Start the widget.** It reads Codex session logs as they are written.
+4. **Sign in to Codex.** Use your ChatGPT account in the CLI.
+
+   ```powershell
+   codex login
+   codex login status
+   ```
+
+5. **Start the widget.** It reads account limits and local session data.
 
    ```powershell
    .\.venv\Scripts\python.exe main.py
    ```
 
-5. **Use the widget.** Click to expand it, drag to move it, or right-click for
-   settings and Exit. It may show `NO DATA` until Codex writes usage data.
+6. **Use the widget.** Click to expand it, drag to move it, or right-click for
+   settings and Exit. If account limits are unavailable, it can show recent
+   limits from local Codex logs.
 
 ## Features
 
@@ -43,13 +52,14 @@ and Git first.
 - Active-session context usage and context-window size when available
 - Current model, reasoning effort, plan, and project name when Codex records them
 - Automatic detection of new and concurrently active rollout files
-- Cached last-known-good rate limits when a newer event has `rate_limits: null`
+- Account rate limits from the Codex CLI, with recent session-log fallback
+- Saved last-known-good rate limits when current sources are unavailable
 - Compact and expanded views, drag positioning, configurable opacity, and
   always-on-top behavior
 - Six taskbar-aware position presets
 - Optional Windows notifications at 20%, 10%, and 5% 5-hour allowance remaining
 - Per-user Windows startup support without administrator access
-- Incremental background reads with bounded initial scans
+- Separate account polling and incremental, bounded session-log reads
 - Small rotating logs and diagnostic command-line modes
 
 The compact bar uses OpenAI's Blossom symbol from its [official logo pack](https://cdn.openai.com/brand/OpenAI-Logos-2025.zip).
@@ -94,10 +104,19 @@ Print one privacy-safe snapshot and exit:
 python main.py --once
 ```
 
-Example output:
+Check the Codex CLI account-limit source without making a model request:
+
+```powershell
+python main.py --check-ratelimits
+```
+
+If this reports a sign-in problem, run `codex login` and try again. This check
+uses the CLI's local App Server, which may contact OpenAI for account limits.
+
+Illustrative `--once` output (your values and data state will differ):
 
 ```text
-Codex Usage Monitor
+Work + Codex Usage Monitor
 
 5-hour:
 Used: 28%
@@ -113,6 +132,7 @@ Context:
 157K / 258K
 61%
 
+Source: app-server
 Status: LIVE
 ```
 
@@ -139,17 +159,21 @@ summary.
 
 ### Rate limits
 
-Codex normally records a 300-minute primary window and a 10,080-minute
-secondary window. The app interprets these as the 5-hour and weekly limits and
-calculates:
+The primary account source is the signed-in Codex CLI's local App Server
+[`account/rateLimits/read`](https://learn.chatgpt.com/docs/app-server) method.
+The monitor selects the Codex bucket's 300-minute and 10,080-minute windows for
+5-hour and 7-day usage. If the account read is unavailable, it checks recent
+local rollout files for valid rate-limit events. It calculates:
 
 ```text
 remaining percentage = 100 - used percentage
 ```
 
 Percentages are clamped to 0–100. Across multiple sessions, the newest valid
-account-level rate snapshot wins. A null or incomplete newer snapshot never
-replaces a valid cached value with zero or `N/A`.
+rollout snapshot wins for fallback. A null or incomplete newer snapshot never
+replaces a valid value with zero or `N/A`. The last valid normalized rate values
+are saved at `%APPDATA%\CodexUsageMonitor\rate_limits.json`; this file does not
+contain raw account responses, credentials, or rollout events.
 
 ### Context
 
@@ -166,14 +190,15 @@ session.
 
 ### Data state
 
-- `LIVE` — recent valid Codex activity is available.
-- `STALE` — the widget is retaining last-known-good data, but its most recent
-  valid activity or rate snapshot is older than roughly two minutes.
-- `NO DATA` — no usable rate-limit or context snapshot has been found yet.
+- `LIVE` — the Codex CLI account-limit read returned valid limits.
+- `FALLBACK` — the account read is unavailable; recent rollout rate limits are
+  being shown.
+- `STALE` — only previously saved rate limits are available.
+- `NO DATA` — no usable rate limits are available yet. Context may still appear.
 
-The reset countdown updates once per second. Rollout data is refreshed in the
-background every four seconds by default, and a reset reaching zero requests an
-immediate refresh.
+The reset countdown updates once per second. Account limits are requested every
+20 seconds by default (configurable from 15 to 300 seconds); session logs are
+checked every four seconds by default. A reset reaching zero requests a refresh.
 
 ## Widget controls
 
@@ -187,8 +212,9 @@ immediate refresh.
 - Position presets use the Windows monitor work area so bottom positions do not
   intentionally overlap the taskbar.
 
-The last position, opacity, expanded state, refresh interval, notification
-preferences, always-on-top state, and position preset are saved locally at:
+The last position, opacity, expanded state, session and account refresh
+intervals, notification preferences, always-on-top state, and position preset
+are saved locally at:
 
 ```text
 %APPDATA%\CodexUsageMonitor\settings.json
@@ -271,20 +297,24 @@ not contain prompts or full rollout events.
 
 ### No data found
 
-1. Run the session-directory verification command above.
-2. Start or use a Codex session so it emits a token-count event.
-3. Run `python main.py --once` to separate parsing from UI behavior.
-4. Run `python main.py --debug` and inspect the safe diagnostic output.
+1. Run `codex login status` to check the CLI sign-in.
+2. Run `python main.py --check-ratelimits` to check the account source.
+3. Run the session-directory verification command above.
+4. Run `python main.py --once` or `--debug` for safe diagnostics.
 
-The app stays open with `NO DATA` if the directory is missing, empty, or
-temporarily inaccessible.
+The app stays open with `NO DATA` when no rate limits can be read. It can still
+show context if the session directory contains usable token-count events.
 
 ### Rate limit unavailable
 
-Codex sometimes emits `rate_limits: null`. The monitor searches backward in
-recent rollouts and retains the last valid snapshot. `N/A` means that no valid
-snapshot has been found at all. Generate fresh Codex activity, choose `Refresh
-Now`, and check again.
+If `codex` is not recognized, install the
+[Codex CLI](https://learn.chatgpt.com/docs/codex/cli) and reopen PowerShell.
+Check its sign-in with `codex login status`; run `codex login` if needed. Then
+run `python main.py --check-ratelimits`. An expired sign-in or network problem
+can prevent the CLI from fetching account limits. The monitor can fall back to
+recent rollout values, then to its saved rate cache. `N/A` means no valid value
+has been found. Use `Refresh Now` after sign-in or connectivity recovers. A CLI
+sign-in is separate from signing in to another Codex app.
 
 ### Context unavailable
 
@@ -294,10 +324,9 @@ turn in the active Codex session usually creates the needed event.
 
 ### The widget says STALE
 
-`STALE` is expected when Codex has been idle or only cached rate data is
-available. It does not mean the displayed values were reset. If Codex is
-actively producing events, check the system clock, permissions, and `--debug`
-log, then use `Refresh Now`.
+`STALE` means the widget has only its saved rate values. It does not mean those
+values were reset to zero. Check CLI sign-in and connectivity with
+`--check-ratelimits`, then use `Refresh Now`.
 
 ### A different CODEX_HOME is in use
 
@@ -331,16 +360,20 @@ console does not flash at normal startup. Use `python main.py --debug` or
 
 ## Privacy and security
 
-Codex Usage Monitor is local-only:
+Codex Usage Monitor stores its data locally:
 
-- It never uses an OpenAI API key or calls the OpenAI API.
-- It has no telemetry, analytics, advertising, or network client.
+- It uses the signed-in local Codex CLI App Server to request account limits.
+  The CLI may contact OpenAI for that read; the monitor does not make model
+  requests or require an OpenAI API key.
+- It has no telemetry, analytics, or advertising. It does not upload rollout
+  contents.
 - Rollout files are opened read-only; the app never modifies or deletes them.
 - The parser extracts only quota, token, context, model, effort, plan, session,
   and working-directory metadata. It deliberately skips prompt/message fields.
 - It does not log complete JSON events, prompts, responses, or credentials.
-- The only persistent app data is settings, small rotating logs, notification
-  deduplication state, and the optional per-user startup registry value.
+- The persistent app data is settings, normalized rate-limit cache, small
+  rotating logs, notification deduplication state, and the optional per-user
+  startup registry value. The app does not save CLI credentials.
 
 `Open Codex Sessions Folder` and `Open Latest Session File` ask Windows to open
 local paths with their normal associated applications. Toast notifications are
@@ -350,10 +383,11 @@ delivered locally through Windows notification facilities.
 
 ```text
 main.py                 Command-line entry point and UI launcher
+app/codex_app_server.py Local Codex CLI account-limit reader
 app/parser.py           Privacy-conscious JSONL field extraction
-app/monitor.py          Discovery, bounded bootstrap scans, and incremental tails
+app/monitor.py          Account and session monitoring with fallback
 app/models.py           Immutable usage snapshots and domain models
-app/settings.py         Validated local settings persistence
+app/settings.py         Validated settings and normalized rate-cache persistence
 app/logging_config.py   Small rotating privacy-safe log
 app/ui.py               Tkinter compact/expanded widget
 app/windows.py          DPI, work-area, startup, and Windows helpers
@@ -361,3 +395,7 @@ app/notifications.py    Optional threshold notification provider
 tests/                  Synthetic parser and monitor tests
 build.bat               Standalone Windows build entry point
 ```
+
+## Development credit
+
+OpenAI Codex assisted with implementation, testing, and documentation.

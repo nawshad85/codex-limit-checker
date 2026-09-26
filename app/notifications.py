@@ -38,8 +38,8 @@ class NotificationManager:
         if (
             rate is None
             or rate.resets_at is None
-            or snapshot.status is not DataStatus.LIVE
-            or snapshot.rate_from_cache
+            or snapshot.status not in (DataStatus.LIVE, DataStatus.FALLBACK)
+            or rate.source == "cache"
         ):
             return None
 
@@ -70,7 +70,7 @@ class NotificationManager:
 
         reset_text = format_countdown(rate.resets_at, current)
         message = (
-            f"Only {threshold}% of your 5-hour Codex limit remains. "
+            f"Only {threshold}% of your shared Work + Codex 5-hour limit remains. "
             f"Reset in {reset_text}."
         )
         try:
@@ -104,4 +104,3 @@ class NotificationManager:
 
 # A descriptive alias keeps the class easy to discover from integration code.
 QuotaNotifier = NotificationManager
-

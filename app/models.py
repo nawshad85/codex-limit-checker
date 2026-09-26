@@ -8,6 +8,7 @@ from typing import Optional
 
 class DataStatus(str, Enum):
     LIVE = "LIVE"
+    FALLBACK = "FALLBACK"
     STALE = "STALE"
     NO_DATA = "NO DATA"
 
@@ -26,6 +27,7 @@ class RateWindow:
     observed_at: float
     source_path: Optional[Path] = None
     source_offset: int = 0
+    source: str = "rollout"
 
     @property
     def remaining_percent(self) -> float:
@@ -82,6 +84,8 @@ class UsageSnapshot:
     status: DataStatus
     rate_from_cache: bool = False
     error_summary: Optional[str] = None
+    rate_source: Optional[str] = None
+    account_refreshed_at: Optional[float] = None
 
     @classmethod
     def empty(cls, scanned_at: float, error_summary: Optional[str] = None) -> "UsageSnapshot":
@@ -118,4 +122,3 @@ class FileState:
     plan: Optional[str] = None
     working_directory: Optional[str] = None
     session_id: Optional[str] = None
-

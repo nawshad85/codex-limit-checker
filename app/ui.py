@@ -51,6 +51,8 @@ class Palette:
 class CodexUsageMonitorUI:
     COMPACT_SIZE = (450, 56)
     EXPANDED_SIZE = (450, 334)
+    # Visible ink of the bundled 36px icon, excluding its faint antialias fringe.
+    LOGO_INK_BOUNDS = (5, 6, 31, 30)
     POSITION_PRESETS = (
         ("Top Left", "top_left"),
         ("Top Center", "top_center"),
@@ -134,7 +136,7 @@ class CodexUsageMonitorUI:
     def _configure_window(self) -> None:
         width, height = self.size
         self.root.withdraw()
-        self.root.title("Codex Usage Monitor")
+        self.root.title("Work + Codex Usage Monitor")
         self.root.overrideredirect(True)
         self.root.configure(background=Palette.TRANSPARENT)
         self.root.geometry(f"{width}x{height}+0+0")
@@ -315,7 +317,7 @@ class CodexUsageMonitorUI:
                 self._requested_resets.add(key)
                 due = True
         if due:
-            self.monitor_service.request_refresh(force_discovery=True)
+            self.monitor_service.request_refresh(force_discovery=True, force_account=True)
         self._render()
         self._schedule_tick(1000)
 
@@ -328,7 +330,7 @@ class CodexUsageMonitorUI:
         self._requested_resets.intersection_update(current)
 
     def refresh_now(self) -> None:
-        self.monitor_service.request_refresh(force_discovery=True)
+        self.monitor_service.request_refresh(force_discovery=True, force_account=True)
 
     def _begin_bar_animation(self, snapshot: UsageSnapshot) -> None:
         targets = {
@@ -524,7 +526,7 @@ class CodexUsageMonitorUI:
 
         dialog = tk.Toplevel(self.root)
         self._settings_window = dialog
-        dialog.title("Codex Usage Monitor Settings")
+        dialog.title("Work + Codex Usage Monitor Settings")
         dialog.configure(background=Palette.BACKGROUND)
         dialog.resizable(False, False)
         dialog.transient(self.root)
@@ -534,6 +536,7 @@ class CodexUsageMonitorUI:
             pass
 
         refresh_var = tk.DoubleVar(value=self.settings.refresh_interval)
+        account_refresh_var = tk.DoubleVar(value=self.settings.account_refresh_interval)
         opacity_var = tk.IntVar(value=int(round(self.settings.opacity * 100)))
         notifications_var = tk.BooleanVar(value=self.settings.notifications_enabled)
         threshold_vars = {
@@ -550,7 +553,7 @@ class CodexUsageMonitorUI:
             foreground=Palette.TEXT,
             font=self._font(12, "bold"),
         ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 16))
-        self._settings_label(content, "Refresh interval").grid(row=1, column=0, sticky="w", pady=6)
+        self._settings_label(content, "Session refresh").grid(row=1, column=0, sticky="w", pady=6)
         refresh = tk.Spinbox(
             content,
             from_=2,
@@ -568,7 +571,25 @@ class CodexUsageMonitorUI:
         refresh.grid(row=1, column=1, sticky="w", padx=(18, 4), pady=6)
         self._settings_label(content, "seconds", muted=True).grid(row=1, column=2, sticky="w")
 
-        self._settings_label(content, "Opacity").grid(row=2, column=0, sticky="w", pady=6)
+        self._settings_label(content, "Account refresh").grid(row=2, column=0, sticky="w", pady=6)
+        account_refresh = tk.Spinbox(
+            content,
+            from_=15,
+            to=300,
+            increment=5,
+            width=7,
+            textvariable=account_refresh_var,
+            background=Palette.SURFACE,
+            foreground=Palette.TEXT,
+            insertbackground=Palette.TEXT,
+            buttonbackground=Palette.BORDER,
+            relief="flat",
+            font=self._font(9),
+        )
+        account_refresh.grid(row=2, column=1, sticky="w", padx=(18, 4), pady=6)
+        self._settings_label(content, "seconds", muted=True).grid(row=2, column=2, sticky="w")
+
+        self._settings_label(content, "Opacity").grid(row=3, column=0, sticky="w", pady=6)
         opacity = tk.Scale(
             content,
             from_=50,
@@ -586,7 +607,7 @@ class CodexUsageMonitorUI:
             borderwidth=0,
             font=self._font(8),
         )
-        opacity.grid(row=2, column=1, columnspan=2, sticky="w", padx=(14, 0), pady=3)
+        opacity.grid(row=3, column=1, columnspan=2, sticky="w", padx=(14, 0), pady=3)
 
         notify = tk.Checkbutton(
             content,
@@ -601,10 +622,10 @@ class CodexUsageMonitorUI:
             borderwidth=0,
             highlightthickness=0,
         )
-        notify.grid(row=3, column=0, columnspan=3, sticky="w", pady=(14, 5))
+        notify.grid(row=4, column=0, columnspan=3, sticky="w", pady=(14, 5))
 
         threshold_frame = tk.Frame(content, background=Palette.BACKGROUND)
-        threshold_frame.grid(row=4, column=0, columnspan=3, sticky="w", padx=(18, 0))
+        threshold_frame.grid(row=5, column=0, columnspan=3, sticky="w", padx=(18, 0))
         for column, value in enumerate((20, 10, 5)):
             tk.Checkbutton(
                 threshold_frame,
@@ -621,7 +642,7 @@ class CodexUsageMonitorUI:
             ).grid(row=0, column=column, padx=(0, 14))
 
         button_frame = tk.Frame(content, background=Palette.BACKGROUND)
-        button_frame.grid(row=5, column=0, columnspan=3, sticky="e", pady=(20, 0))
+        button_frame.grid(row=6, column=0, columnspan=3, sticky="e", pady=(20, 0))
 
         def close_dialog() -> None:
             self._settings_window = None
@@ -636,11 +657,17 @@ class CodexUsageMonitorUI:
                 interval = float(refresh_var.get())
             except (ValueError, tk.TclError):
                 interval = self.settings.refresh_interval
+            try:
+                account_interval = float(account_refresh_var.get())
+            except (ValueError, tk.TclError):
+                account_interval = self.settings.account_refresh_interval
             self.settings.refresh_interval = float(clamp(interval, 2.0, 60.0))
+            self.settings.account_refresh_interval = float(clamp(account_interval, 15.0, 300.0))
             self.settings.notifications_enabled = bool(notifications_var.get())
             selected = [value for value, var in threshold_vars.items() if var.get()]
             self.settings.notification_thresholds = sorted(selected or [20, 10, 5], reverse=True)
             self.monitor_service.set_interval(self.settings.refresh_interval)
+            self.monitor_service.set_account_interval(self.settings.account_refresh_interval)
             self.set_opacity(float(opacity_var.get()) / 100.0)
             self.settings_store.save(self.settings)
             close_dialog()
@@ -728,31 +755,53 @@ class CodexUsageMonitorUI:
             if not self._closing:
                 LOGGER.debug("Widget render failed", exc_info=True)
 
-    def _render_compact(self, _width: int, _height: int) -> None:
+    def _render_compact_identity(self, right: int, height: int) -> None:
+        center_x = (1 + right) / 2
+        center_y = (1 + height - 4) / 2
+        identity_tag = "compact_identity"
+        status_tag = "compact_status"
         status_color = self._status_color(self.snapshot.status)
         if self._logo_image is not None:
-            self.canvas.create_image(38, 18, image=self._logo_image)
+            self.canvas.create_image(
+                center_x, 0, image=self._logo_image, tags=identity_tag
+            )
+            _left, top, _right, bottom = self.LOGO_INK_BOUNDS
+            logo_top = top - self._logo_image.height() / 2
+            logo_bottom = bottom - self._logo_image.height() / 2
         else:
-            self.canvas.create_text(
-                14,
-                11,
+            logo_item = self.canvas.create_text(
+                center_x,
+                0,
                 text="CODEX",
-                anchor="nw",
+                anchor="center",
                 fill=Palette.TEXT,
                 font=self._font(10, "bold"),
+                tags=identity_tag,
             )
-        status_y = 37
-        self.canvas.create_oval(14, status_y - 3, 20, status_y + 3, fill=status_color, outline="")
+            _left, logo_top, _right, logo_bottom = self.canvas.bbox(logo_item)
+        self.canvas.create_oval(
+            0, -3, 6, 3, fill=status_color, outline="",
+            tags=(identity_tag, status_tag),
+        )
         self.canvas.create_text(
-            25,
-            status_y,
+            11,
+            0,
             text=self.snapshot.status.value,
             anchor="w",
             fill=Palette.MUTED,
             font=self._font(7, "bold"),
+            tags=(identity_tag, status_tag),
         )
+        left, top, right, bottom = self.canvas.bbox(status_tag)
+        status_offset_y = logo_bottom + 3 - top
+        self.canvas.move(status_tag, center_x - (left + right) / 2, status_offset_y)
+        group_bottom = bottom + status_offset_y
+        self.canvas.move(identity_tag, 0, center_y - (logo_top + group_bottom) / 2)
+
+    def _render_compact(self, _width: int, _height: int) -> None:
         section_starts = (68, 195, 322)
         block_width = 104
+        self._render_compact_identity(section_starts[0], _height)
         for x in section_starts:
             self.canvas.create_line(x, 10, x, 46, fill=Palette.DIVIDER)
 
@@ -774,6 +823,7 @@ class CodexUsageMonitorUI:
 
     def _compact_rate_block(self, x: int, width: int, label: str, rate, display: Optional[float]) -> None:
         remaining = rate.remaining_percent if rate else None
+        marker = "~" if rate is not None and rate.source == "cache" else ""
         self.canvas.create_text(
             x,
             9,
@@ -785,7 +835,7 @@ class CodexUsageMonitorUI:
         self.canvas.create_text(
             x + width,
             8,
-            text=f"{format_percent(remaining)} LEFT" if remaining is not None else "N/A",
+            text=f"{marker}{format_percent(remaining)} LEFT" if remaining is not None else "N/A",
             anchor="ne",
             fill=self._remaining_color(remaining),
             font=self._font(8, "bold"),
@@ -890,12 +940,18 @@ class CodexUsageMonitorUI:
             fill=Palette.MUTED,
             font=self._font(8),
         )
-        timestamp = self.snapshot.latest_event_at or self.snapshot.scanned_at
+        timestamp = (
+            self.snapshot.account_refreshed_at
+            if self.snapshot.status is DataStatus.LIVE
+            else self.snapshot.latest_event_at
+        ) or self.snapshot.scanned_at
         try:
             updated = datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
         except (OSError, OverflowError, ValueError):
             updated = "N/A"
-        suffix = " • cached quota" if self.snapshot.rate_from_cache else ""
+        suffix = f" • {self.snapshot.rate_source}" if self.snapshot.rate_source else ""
+        if self.snapshot.rate_from_cache:
+            suffix += " • cached quota"
         if self.snapshot.error_summary:
             suffix += f" • {self.snapshot.error_summary}"
         self.canvas.create_text(
@@ -918,7 +974,8 @@ class CodexUsageMonitorUI:
             fill=Palette.MUTED,
             font=self._font(8, "bold"),
         )
-        value = f"{format_percent(remaining)} REMAINING" if remaining is not None else "N/A"
+        marker = "~" if rate is not None and rate.source == "cache" else ""
+        value = f"{marker}{format_percent(remaining)} REMAINING" if remaining is not None else "N/A"
         self.canvas.create_text(
             x + width,
             y - 1,
@@ -1053,6 +1110,8 @@ class CodexUsageMonitorUI:
     def _status_color(status: DataStatus) -> str:
         if status is DataStatus.LIVE:
             return Palette.GREEN
+        if status is DataStatus.FALLBACK:
+            return Palette.ORANGE
         if status is DataStatus.STALE:
             return Palette.YELLOW
         return Palette.DIM

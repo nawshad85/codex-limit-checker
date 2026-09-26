@@ -6,7 +6,7 @@ from pathlib import Path
 
 from app.models import DataStatus, LimitKind, RateWindow, UsageSnapshot
 from app.notifications import NotificationManager
-from app.settings import AppSettings, SettingsStore
+from app.settings import AppSettings, RateSnapshotStore, SettingsStore
 from app.utils import format_countdown, format_tokens
 from app.windows import MonitorWorkArea, clamp_to_work_area, preset_position
 
@@ -19,12 +19,14 @@ class SettingsTests(unittest.TestCase):
             loaded = SettingsStore(path).load()
             self.assertEqual(loaded.opacity, 0.95)
             self.assertEqual(loaded.refresh_interval, 4.0)
+            self.assertEqual(loaded.account_refresh_interval, 20.0)
 
     def test_loaded_values_are_validated_field_by_field(self) -> None:
         loaded = AppSettings.from_mapping(
             {
                 "opacity": 5,
                 "refresh_interval": 0.1,
+                "account_refresh_interval": 2,
                 "x": "wrong",
                 "y": -200,
                 "position_preset": "offscreen_magic",
@@ -33,6 +35,7 @@ class SettingsTests(unittest.TestCase):
         )
         self.assertEqual(loaded.opacity, 1.0)
         self.assertEqual(loaded.refresh_interval, 2.0)
+        self.assertEqual(loaded.account_refresh_interval, 15.0)
         self.assertIsNone(loaded.x)
         self.assertEqual(loaded.y, -200)
         self.assertIsNone(loaded.position_preset)
@@ -50,16 +53,42 @@ class SettingsTests(unittest.TestCase):
             self.assertTrue(loaded.expanded)
             self.assertFalse(path.with_suffix(".tmp").exists())
 
+    def test_rate_cache_contains_only_normalized_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rate_limits.json"
+            store = RateSnapshotStore(path)
+            rate = RateWindow(
+                kind=LimitKind.FIVE_HOUR,
+                used_percent=18,
+                window_minutes=300,
+                resets_at=2_000,
+                observed_at=1_000,
+                source_path=Path("private-rollout.jsonl"),
+                source="app-server",
+            )
+            self.assertTrue(store.save({LimitKind.FIVE_HOUR: rate}))
+            self.assertNotIn("private-rollout", path.read_text(encoding="utf-8"))
+            loaded = store.load()[LimitKind.FIVE_HOUR]
+            self.assertEqual(loaded.used_percent, 18)
+            self.assertEqual(loaded.source, "cache")
+            self.assertIsNone(loaded.source_path)
+
 
 class NotificationTests(unittest.TestCase):
     @staticmethod
-    def snapshot(remaining: float, reset: float, status: DataStatus = DataStatus.LIVE) -> UsageSnapshot:
+    def snapshot(
+        remaining: float,
+        reset: float,
+        status: DataStatus = DataStatus.LIVE,
+        source: str = "rollout",
+    ) -> UsageSnapshot:
         rate = RateWindow(
             kind=LimitKind.FIVE_HOUR,
             used_percent=100.0 - remaining,
             window_minutes=300,
             resets_at=reset,
             observed_at=1_000.0,
+            source=source,
         )
         return UsageSnapshot(
             five_hour=rate,
@@ -114,6 +143,27 @@ class NotificationTests(unittest.TestCase):
             self.assertIsNone(manager.consider(self.snapshot(5, 2_000, DataStatus.STALE), now=1_000))
             self.assertIsNone(manager.consider(self.snapshot(5, 900), now=1_000))
             self.assertEqual(sent, [])
+
+    def test_recent_fallback_can_notify_but_cached_quota_cannot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sent: list[str] = []
+            manager = NotificationManager(
+                AppSettings(),
+                SettingsStore(Path(directory) / "settings.json"),
+                sender=lambda _title, message: not sent.append(message),
+            )
+            self.assertIsNone(
+                manager.consider(
+                    self.snapshot(10, 2_000, DataStatus.STALE, "cache"), now=1_000
+                )
+            )
+            self.assertEqual(
+                manager.consider(
+                    self.snapshot(10, 2_000, DataStatus.FALLBACK), now=1_000
+                ),
+                10,
+            )
+            self.assertIn("Work + Codex", sent[0])
 
 
 class DisplayUtilityTests(unittest.TestCase):

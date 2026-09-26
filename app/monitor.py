@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
+from .codex_app_server import CodexAppServerClient, RateLimitState
 from .models import (
     ContextUsage,
     DataStatus,
@@ -20,6 +21,7 @@ from .models import (
     UsageSnapshot,
 )
 from .parser import RolloutParser
+from .settings import RateSnapshotStore
 from .utils import leaf_name
 
 
@@ -441,16 +443,139 @@ class SessionMonitor:
                 position = start
 
 
-class MonitorService:
-    """Run SessionMonitor off the Tk thread and publish only the newest snapshot."""
+class AccountUsageMonitor:
+    """Combine live account limits with rollout context and safe cached limits."""
 
-    def __init__(self, monitor: SessionMonitor, interval: float = 4.0) -> None:
+    def __init__(
+        self,
+        sessions: SessionMonitor,
+        *,
+        app_server: Optional[CodexAppServerClient] = None,
+        rate_store: Optional[RateSnapshotStore] = None,
+        account_interval: float = 20.0,
+        clock=time.time,
+    ) -> None:
+        self.sessions = sessions
+        self.app_server = app_server or CodexAppServerClient()
+        self.rate_store = rate_store or RateSnapshotStore()
+        self.account_interval = max(15.0, min(300.0, float(account_interval)))
+        self.clock = clock
+        self._cached_rates = self.rate_store.load()
+        self._account_state: Optional[RateLimitState] = None
+        self._account_succeeded = False
+        self._next_account_poll = 0.0
+        self._account_error: Optional[str] = None
+
+    def set_account_interval(self, seconds: float) -> None:
+        self.account_interval = max(15.0, min(300.0, float(seconds)))
+        self._next_account_poll = min(self._next_account_poll, self.clock() + self.account_interval)
+
+    def refresh(self, *, force_discovery: bool = False, force_account: bool = False) -> UsageSnapshot:
+        now = self.clock()
+        if force_account or now >= self._next_account_poll:
+            self._next_account_poll = now + self.account_interval
+            try:
+                state = self.app_server.read_rate_limits()
+                self._account_state = state
+                self._account_succeeded = True
+                self._account_error = None
+                LOGGER.debug(
+                    "Account rate fetch succeeded: limit=%s 5h=%s weekly=%s",
+                    state.limit_id,
+                    state.five_hour.used_percent if state.five_hour else None,
+                    state.weekly.used_percent if state.weekly else None,
+                )
+            except Exception as exc:  # Account failures must never block rollout fallback.
+                self._account_succeeded = False
+                self._account_error = type(exc).__name__
+                LOGGER.debug("Account rate fetch unavailable: %s", type(exc).__name__)
+
+        rollout = self.sessions.refresh(force_discovery=force_discovery)
+        return self._combine(rollout, self.clock())
+
+    def _combine(self, rollout: UsageSnapshot, now: float) -> UsageSnapshot:
+        live = self._account_state if self._account_succeeded else None
+        chosen: dict[LimitKind, Optional[RateWindow]] = {}
+        fresh_rollout = False
+        cache_changed = False
+
+        for kind, rollout_rate, account_rate in (
+            (LimitKind.FIVE_HOUR, rollout.five_hour, live.five_hour if live else None),
+            (LimitKind.WEEKLY, rollout.weekly, live.weekly if live else None),
+        ):
+            if account_rate is not None:
+                selected = account_rate
+            elif rollout_rate is not None and self._rollout_is_recent(rollout_rate, now):
+                selected = rollout_rate
+                fresh_rollout = True
+            else:
+                historical = self._cached_rates.get(kind)
+                if rollout_rate is not None and (
+                    historical is None or rollout_rate.observed_at > historical.observed_at
+                ):
+                    historical = replace(rollout_rate, source="cache", source_path=None, source_offset=0)
+                selected = historical
+
+            chosen[kind] = selected
+            if selected is not None and selected.source != "cache":
+                previous = self._cached_rates.get(kind)
+                self._cached_rates[kind] = replace(
+                    selected, source="cache", source_path=None, source_offset=0
+                )
+                cache_changed = cache_changed or previous != self._cached_rates[kind]
+
+        if cache_changed:
+            self.rate_store.save(self._cached_rates)
+
+        has_rates = any(chosen.values())
+        sources = {rate.source for rate in chosen.values() if rate is not None}
+        source = " + ".join(
+            name for name in ("app-server", "rollout", "cache") if name in sources
+        ) or None
+        if not has_rates:
+            status = DataStatus.NO_DATA
+        elif live is not None and (live.five_hour is not None or live.weekly is not None):
+            status = DataStatus.LIVE
+        elif fresh_rollout:
+            status = DataStatus.FALLBACK
+        else:
+            status = DataStatus.STALE
+
+        cached = any(rate is not None and rate.source == "cache" for rate in chosen.values())
+        return replace(
+            rollout,
+            five_hour=chosen[LimitKind.FIVE_HOUR],
+            weekly=chosen[LimitKind.WEEKLY],
+            plan=live.plan if live and live.plan else rollout.plan,
+            status=status,
+            rate_from_cache=cached,
+            rate_source=source,
+            account_refreshed_at=self._account_state.fetched_at if self._account_state else None,
+            error_summary=self._account_error or rollout.error_summary,
+        )
+
+    def _rollout_is_recent(self, rate: RateWindow, now: float) -> bool:
+        age = now - rate.observed_at
+        return (
+            -300.0 <= age <= self.sessions.stale_after
+            and (rate.resets_at is None or rate.resets_at > now)
+        )
+
+    def close(self) -> None:
+        self.app_server.close()
+
+
+class MonitorService:
+    """Run account and session monitors off the Tk thread, publishing snapshots."""
+
+    def __init__(self, monitor: AccountUsageMonitor, interval: float = 4.0) -> None:
         self.monitor = monitor
         self.interval = max(2.0, min(60.0, interval))
         self.snapshots: queue.Queue[UsageSnapshot] = queue.Queue(maxsize=1)
         self._stop = threading.Event()
         self._refresh = threading.Event()
         self._force_discovery = True
+        self._force_account = True
         self._thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
@@ -459,33 +584,51 @@ class MonitorService:
         self._thread = threading.Thread(target=self._run, name="codex-session-monitor", daemon=True)
         self._thread.start()
 
-    def request_refresh(self, *, force_discovery: bool = False) -> None:
+    def request_refresh(self, *, force_discovery: bool = False, force_account: bool = False) -> None:
         if force_discovery:
             self._force_discovery = True
+        if force_account:
+            self._force_account = True
         self._refresh.set()
 
     def set_interval(self, seconds: float) -> None:
         self.interval = max(2.0, min(60.0, float(seconds)))
         self._refresh.set()
 
+    def set_account_interval(self, seconds: float) -> None:
+        self.monitor.set_account_interval(seconds)
+        self._force_account = True
+        self._refresh.set()
+
     def stop(self, timeout: float = 1.5) -> None:
         self._stop.set()
         self._refresh.set()
+        self.monitor.close()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=timeout)
 
     def _run(self) -> None:
-        while not self._stop.is_set():
-            try:
-                force = self._force_discovery
-                self._force_discovery = False
-                snapshot = self.monitor.refresh(force_discovery=force)
-                self._publish(snapshot)
-            except Exception as exc:
-                LOGGER.exception("Monitor cycle failed")
-                self._publish(UsageSnapshot.empty(time.time(), type(exc).__name__))
-            self._refresh.wait(self.interval)
-            self._refresh.clear()
+        try:
+            while not self._stop.is_set():
+                try:
+                    force_discovery = self._force_discovery
+                    force_account = self._force_account
+                    self._force_discovery = False
+                    self._force_account = False
+                    snapshot = self.monitor.refresh(
+                        force_discovery=force_discovery,
+                        force_account=force_account,
+                    )
+                    if not self._stop.is_set():
+                        self._publish(snapshot)
+                except Exception as exc:
+                    LOGGER.exception("Monitor cycle failed")
+                    if not self._stop.is_set():
+                        self._publish(UsageSnapshot.empty(time.time(), type(exc).__name__))
+                self._refresh.wait(self.interval)
+                self._refresh.clear()
+        finally:
+            self.monitor.close()
 
     def _publish(self, snapshot: UsageSnapshot) -> None:
         try:
