@@ -20,6 +20,7 @@ class AppSettings:
     y: Optional[int] = None
     opacity: float = 0.95
     expanded: bool = False
+    view_mode: str = "icon"
     refresh_interval: float = 4.0
     account_refresh_interval: float = 20.0
     notifications_enabled: bool = True
@@ -29,6 +30,13 @@ class AppSettings:
     monitor_name: Optional[str] = None
     notified_window: Optional[str] = None
     notified_thresholds: list[int] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.view_mode, str) or self.view_mode not in {"icon", "compact", "expanded"}:
+            self.view_mode = "icon"
+        if self.expanded and self.view_mode == "icon":
+            self.view_mode = "expanded"
+        self.expanded = self.view_mode == "expanded"
 
     @classmethod
     def from_mapping(cls, raw: Any) -> "AppSettings":
@@ -70,11 +78,15 @@ class AppSettings:
             "top_left", "top_center", "top_right",
             "bottom_left", "bottom_center", "bottom_right",
         }
+        view_mode = raw.get("view_mode")
+        if not isinstance(view_mode, str) or view_mode not in {"icon", "compact", "expanded"}:
+            view_mode = "expanded" if raw.get("expanded", False) else "icon"
         return cls(
             x=optional_int("x"),
             y=optional_int("y"),
             opacity=float(clamp(float(opacity), 0.50, 1.00)),
-            expanded=bool(raw.get("expanded", defaults.expanded)),
+            expanded=view_mode == "expanded",
+            view_mode=view_mode,
             refresh_interval=float(clamp(float(refresh), 2.0, 60.0)),
             account_refresh_interval=float(clamp(float(account_refresh), 15.0, 300.0)),
             notifications_enabled=bool(raw.get("notifications_enabled", defaults.notifications_enabled)),

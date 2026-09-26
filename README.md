@@ -42,8 +42,9 @@ Git, and the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli) first.
    .\.venv\Scripts\python.exe main.py
    ```
 
-6. **Use the widget.** Click to expand it, drag to move it, or right-click for
-   settings and Exit. If account limits are unavailable, it can show recent
+6. **Use the widget.** Click the icon to show the usage bar, then click the bar
+   for details. Drag to move it, or right-click for settings and Exit.
+   If account limits are unavailable, it can show recent
    limits from local Codex logs.
 
 ## Features
@@ -54,7 +55,7 @@ Git, and the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli) first.
 - Automatic detection of new and concurrently active rollout files
 - Account rate limits from the Codex CLI, with recent session-log fallback
 - Saved last-known-good rate limits when current sources are unavailable
-- Compact and expanded views, drag positioning, configurable opacity, and
+- Icon-only, compact, and detailed views, drag positioning, configurable opacity, and
   always-on-top behavior
 - Six taskbar-aware position presets
 - Optional Windows notifications at 20%, 10%, and 5% 5-hour allowance remaining
@@ -202,17 +203,19 @@ checked every four seconds by default. A reset reaching zero requests a refresh.
 
 ## Widget controls
 
-- The default compact size is 450 x 56 pixels; expanded mode is 450 x 334.
+- The default icon-only view is 48 x 48 pixels. The usage bar is 450 x 56;
+  details are 450 x 334.
 - Opacity defaults to 95% and can be set from 50% to 100%.
-- Click without dragging to switch between compact and expanded views.
+- Click without dragging to cycle through icon, usage bar, details, and back
+  to icon. Escape goes back one view.
 - Drag from a non-interactive area to move the widget.
-- Right-click for `Expand / Collapse`, `Refresh Now`, `Always on Top`,
+- Right-click for view controls, `Icon Only`, `Refresh Now`, `Always on Top`,
   `Launch at Startup`, `Opacity`, `Position`, `Open Codex Sessions Folder`,
   `Open Latest Session File`, `Settings`, and `Exit`.
 - Position presets use the Windows monitor work area so bottom positions do not
   intentionally overlap the taskbar.
 
-The last position, opacity, expanded state, session and account refresh
+The last position, opacity, selected view, session and account refresh
 intervals, notification preferences, always-on-top state, and position preset
 are saved locally at:
 

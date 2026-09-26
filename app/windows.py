@@ -280,20 +280,63 @@ class WindowsPositioner:
         except Exception:
             LOGGER.debug("Tk window positioning failed", exc_info=True)
 
-    def apply_rounded_corners(self) -> None:
-        if not IS_WINDOWS or not self.hwnd:
+    def apply_window_shape(self, *, circular: bool) -> None:
+        """Shape the native wrapper, not just the transparent Tk canvas."""
+        hwnd = self.hwnd
+        if not IS_WINDOWS or not hwnd:
             return
         try:
-            value = ctypes.c_int(2)  # DWMWCP_ROUND
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                self.hwnd, 33, ctypes.byref(value), ctypes.sizeof(value)
+            from ctypes import wintypes
+
+            set_attribute = ctypes.windll.dwmapi.DwmSetWindowAttribute
+            set_attribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+            set_attribute.restype = ctypes.c_long
+            # A system-drawn border/shadow follows the rectangular HWND, even
+            # when Tk's canvas corners are transparent. Icon mode owns its frame.
+            attributes = (
+                (2, ctypes.c_int(1 if circular else 0)),  # NC rendering: disabled / window style
+                (33, ctypes.c_int(1 if circular else 2)),  # DONOTROUND / ROUND
+                (34, wintypes.DWORD(0xFFFFFFFE if circular else 0xFFFFFFFF)),  # NONE / DEFAULT
+                (20, ctypes.c_int(1)),  # Immersive dark mode
             )
-            dark = ctypes.c_int(1)
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                self.hwnd, 20, ctypes.byref(dark), ctypes.sizeof(dark)
-            )
+            for attribute, value in attributes:
+                if set_attribute(hwnd, attribute, ctypes.byref(value), ctypes.sizeof(value)) < 0:
+                    LOGGER.debug("DWM attribute %s is unavailable", attribute)
         except (AttributeError, OSError, ctypes.ArgumentError):
             LOGGER.debug("DWM window attributes are unavailable")
+
+        # Regions also work on older Windows versions without the DWM options.
+        # Windows owns a region after SetWindowRgn succeeds; only free failures.
+        region = None
+        transferred = False
+        delete_object = None
+        try:
+            from ctypes import wintypes
+
+            set_region = ctypes.windll.user32.SetWindowRgn
+            set_region.argtypes = [wintypes.HWND, wintypes.HRGN, wintypes.BOOL]
+            set_region.restype = ctypes.c_int
+            delete_object = ctypes.windll.gdi32.DeleteObject
+            delete_object.argtypes = [wintypes.HGDIOBJ]
+            delete_object.restype = wintypes.BOOL
+            if circular:
+                create_region = ctypes.windll.gdi32.CreateEllipticRgn
+                create_region.argtypes = [ctypes.c_int] * 4
+                create_region.restype = wintypes.HRGN
+                rect = self.window_rect()
+                region = create_region(0, 0, max(1, rect.width), max(1, rect.height))
+                if not region:
+                    LOGGER.debug("Circular window region could not be created")
+                    return
+            # NULL removes the icon clip so both wider views can draw normally.
+            transferred = bool(set_region(hwnd, region, True))
+            if not transferred:
+                LOGGER.debug("Native window shape could not be changed")
+        except (AttributeError, OSError, ctypes.ArgumentError):
+            LOGGER.debug("Native window regions are unavailable")
+        finally:
+            if region and not transferred and delete_object is not None:
+                delete_object(region)
 
 
 class StartupManager:

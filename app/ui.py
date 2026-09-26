@@ -49,6 +49,7 @@ class Palette:
 
 
 class CodexUsageMonitorUI:
+    ICON_SIZE = (48, 48)
     COMPACT_SIZE = (450, 56)
     EXPANDED_SIZE = (450, 334)
     # Visible ink of the bundled 36px icon, excluding its faint antialias fringe.
@@ -86,6 +87,7 @@ class CodexUsageMonitorUI:
         self._placed = False
         self._press: Optional[tuple[int, int, WindowRect]] = None
         self._dragging = False
+        self._icon_anchor: Optional[tuple[int, int]] = None
         self._after_ids: set[str] = set()
         self._poll_after: Optional[str] = None
         self._tick_after: Optional[str] = None
@@ -131,7 +133,9 @@ class CodexUsageMonitorUI:
 
     @property
     def size(self) -> tuple[int, int]:
-        return self.EXPANDED_SIZE if self.settings.expanded else self.COMPACT_SIZE
+        if self.settings.view_mode == "icon":
+            return self.ICON_SIZE
+        return self.EXPANDED_SIZE if self.settings.view_mode == "expanded" else self.COMPACT_SIZE
 
     def _configure_window(self) -> None:
         width, height = self.size
@@ -159,7 +163,6 @@ class CodexUsageMonitorUI:
         )
         self.canvas.pack(fill="both", expand=True)
         self.root.update_idletasks()
-        self.positioner.apply_rounded_corners()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def _bind_events(self) -> None:
@@ -182,7 +185,8 @@ class CodexUsageMonitorUI:
             "font": self._font(9),
         }
         self.context_menu = tk.Menu(self.root, **menu_options)
-        self.context_menu.add_command(label="Expand", command=self.toggle_expanded)
+        self.context_menu.add_command(label="Show Usage Bar", command=self._menu_change_view)
+        self.context_menu.add_command(label="Icon Only", command=lambda: self.set_view_mode("icon"))
         self.context_menu.add_command(label="Refresh Now", command=self.refresh_now)
         self.context_menu.add_separator()
 
@@ -246,6 +250,8 @@ class CodexUsageMonitorUI:
         self._started = True
         self._initial_position()
         self.root.deiconify()
+        self.root.update_idletasks()
+        self.positioner.apply_window_shape(circular=self.settings.view_mode == "icon")
         try:
             self.root.lift()
         except tk.TclError:
@@ -391,17 +397,23 @@ class CodexUsageMonitorUI:
         if dragged:
             self.settings.position_preset = None
             self._clamp_and_remember_position(save=True)
+            self._icon_anchor = (self.settings.x, self.settings.y)
         else:
             self.toggle_expanded()
 
     def _on_escape(self, _event: tk.Event) -> None:
-        if self.settings.expanded:
-            self.toggle_expanded()
+        if self.settings.view_mode == "expanded":
+            self.set_view_mode("compact")
+        elif self.settings.view_mode == "compact":
+            self.set_view_mode("icon")
 
     def _show_context_menu(self, event: tk.Event) -> None:
         try:
             self.context_menu.entryconfigure(
-                0, label="Collapse" if self.settings.expanded else "Expand"
+                0, label={"icon": "Show Usage Bar", "compact": "Show Details", "expanded": "Collapse to Usage Bar"}[self.settings.view_mode]
+            )
+            self.context_menu.entryconfigure(
+                1, state="disabled" if self.settings.view_mode == "icon" else "normal"
             )
             self._topmost_var.set(self.settings.always_on_top)
             self._startup_var.set(self.startup.is_enabled())
@@ -423,20 +435,33 @@ class CodexUsageMonitorUI:
                 pass
 
     def toggle_expanded(self) -> None:
-        self.settings.expanded = not self.settings.expanded
+        next_mode = {"icon": "compact", "compact": "expanded", "expanded": "icon"}
+        self.set_view_mode(next_mode[self.settings.view_mode])
+
+    def _menu_change_view(self) -> None:
+        self.set_view_mode("expanded" if self.settings.view_mode == "compact" else "compact")
+
+    def set_view_mode(self, mode: str) -> None:
+        if mode not in {"icon", "compact", "expanded"} or mode == self.settings.view_mode:
+            return
+        rect = self.positioner.window_rect()
+        if self.settings.view_mode == "icon":
+            self._icon_anchor = (rect.left, rect.top)
+        self.settings.view_mode = mode
+        self.settings.expanded = mode == "expanded"
         width, height = self.size
         self.canvas.configure(width=width, height=height)
         if self.settings.position_preset:
             self.apply_position_preset(self.settings.position_preset, save=False)
         else:
-            rect = self.positioner.window_rect()
             monitors = self.positioner.work_areas()
-            proposed = WindowRect(rect.left, rect.top, rect.left + width, rect.top + height)
-            area = monitor_for_rect(proposed, monitors, self.settings.monitor_name)
-            x, y = clamp_to_work_area(rect.left, rect.top, width, height, area)
+            area = monitor_for_rect(rect, monitors, self.settings.monitor_name)
+            anchor_x, anchor_y = self._icon_anchor if mode == "icon" and self._icon_anchor else (rect.left, rect.top)
+            x, y = clamp_to_work_area(anchor_x, anchor_y, width, height, area)
             self.positioner.place(x, y, width, height)
             self.settings.x, self.settings.y = x, y
             self.settings.monitor_name = area.name
+        self.positioner.apply_window_shape(circular=mode == "icon")
         self.settings_store.save(self.settings)
         self._render()
 
@@ -736,6 +761,14 @@ class CodexUsageMonitorUI:
         try:
             self.canvas.delete("all")
             width, height = self.size
+            if self.settings.view_mode == "icon":
+                self.canvas.create_oval(3, 4, width - 1, height, fill=Palette.SHADOW, outline="")
+                self.canvas.create_oval(
+                    1, 1, width - 3, height - 3,
+                    fill=Palette.BACKGROUND, outline=Palette.BORDER, width=1,
+                )
+                self._render_icon(width, height)
+                return
             self._rounded_rect(3, 4, width - 2, height - 1, 14, fill=Palette.SHADOW)
             self._rounded_rect(
                 1,
@@ -747,13 +780,24 @@ class CodexUsageMonitorUI:
                 outline=Palette.BORDER,
                 width=1,
             )
-            if self.settings.expanded:
+            if self.settings.view_mode == "expanded":
                 self._render_expanded(width, height)
             else:
                 self._render_compact(width, height)
         except tk.TclError:
             if not self._closing:
                 LOGGER.debug("Widget render failed", exc_info=True)
+
+    def _render_icon(self, width: int, height: int) -> None:
+        center_x = (1 + width - 3) / 2
+        center_y = (1 + height - 3) / 2
+        if self._logo_image is not None:
+            self.canvas.create_image(center_x, center_y, image=self._logo_image)
+        else:
+            self.canvas.create_text(
+                center_x, center_y, text="C", fill=Palette.TEXT,
+                font=self._font(16, "bold"),
+            )
 
     def _render_compact_identity(self, right: int, height: int) -> None:
         center_x = (1 + right) / 2
